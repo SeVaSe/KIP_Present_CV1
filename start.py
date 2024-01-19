@@ -12,60 +12,82 @@ from math import atan, atan2, pi, degrees
 from numpy import concatenate
 from scipy.spatial import distance as dist
 
+# Задаем стандартный стиль для отображения ключевых точек тела
 DEFAULT_LANDMARKS_STYLE = mp.solutions.drawing_styles.get_default_pose_landmarks_style()
 
-# Optionally record the video feed to a timestamped AVI in the current directory
+# Опционально записываем видеопоток в AVI файл с временной меткой в текущем каталоге
 RECORDING_FILENAME = str(datetime.now()).replace('.','').replace(':','') + '.avi'
 FPS = 10
 
-VISIBILITY_THRESHOLD = .8 # amount of certainty that a body landmark is visible
-STRAIGHT_LIMB_MARGIN = 20 # degrees from 180
-EXTENDED_LIMB_MARGIN = .8 # lower limb length as fraction of upper limb
+# Порог видимости ключевых точек тела
+VISIBILITY_THRESHOLD = .8
 
-ARM_CROSSED_RATIO = 2 # max distance from wrist to opposite elbow, relative to mouth width
+# Маржа для определения, вытянута ли конечность (в градусах)
+STRAIGHT_LIMB_MARGIN = 20
 
-MOUTH_COVER_THRESHOLD = .03 # hands over mouth max distance error out of 1
+# Длина нижней конечности в виде доли от верхней конечности
+EXTENDED_LIMB_MARGIN = .8
 
-LEG_LIFT_MIN = -10 # degrees from horizontal
+# Максимальное расстояние от запястья до противоположного локтя, относительно ширины рта
+ARM_CROSSED_RATIO = 2
 
+# Порог расстояния для проверки, находятся ли руки перед ртом (в единицах от 0 до 1)
+MOUTH_COVER_THRESHOLD = .03
+
+# Минимальный угол поднимания ноги от горизонтали (в градусах)
+LEG_LIFT_MIN = -10
+
+# Порог для определения приседания (в единицах от 0 до 1)
 SQUAT_THRESHOLD = .1
 
+# Порог для определения прыжка (разница высоты бедер в кадре)
 JUMP_THRESHOLD = .0001
 
-# R side: 90 top to 0 right to -90 bottom
-# L side: 90 top to 180 left to 269... -> -90 bottom
+# Словарь семафоров для различных жестов и действий
 semaphores = {}
 
-LEG_EXTEND_ANGLE = 18 # degrees from vertical standing; should be divisor of 90
+# Угол расширения ноги (в градусах от вертикального стояния); должен быть делителем 90
+LEG_EXTEND_ANGLE = 18
+
+# Словарь углов расширения ног для определения ноги и ее положения
 leg_extension_angles = {
-  (-90, -90 + LEG_EXTEND_ANGLE): (True, 0), # right leg, low
-  (-90, -90 + 2*LEG_EXTEND_ANGLE): (True, 1), # right leg, high
-  (270 - LEG_EXTEND_ANGLE, -90): (False, 0), # left leg, low
-  (270 - 2*LEG_EXTEND_ANGLE, -90): (False, 1), #left leg high
+  (-90, -90 + LEG_EXTEND_ANGLE): (True, 0),  # правая нога, низкая
+  (-90, -90 + 2*LEG_EXTEND_ANGLE): (True, 1), # правая нога, высокая
+  (270 - LEG_EXTEND_ANGLE, -90): (False, 0),  # левая нога, низкая
+  (270 - 2*LEG_EXTEND_ANGLE, -90): (False, 1), # левая нога, высокая
 }
 
-FRAME_HISTORY = 8 # pose history is compared against FRAME_HISTORY recent frames
+# Количество последних кадров, используемых для анализа движений
+FRAME_HISTORY = 8
+
+# Половина истории кадров
 HALF_HISTORY = int(FRAME_HISTORY/2)
 
+# Пустой кадр для заполнения истории
 empty_frame = {
   'hipL_y': 0,
   'hipR_y': 0,
   'hips_dy': 0,
 }
+
+# История последних кадров для каждого игрока
 last_frames = FRAME_HISTORY*[empty_frame.copy()]
 
+# Середина кадра
 frame_midpoint = (0,0)
 
+# Последние нажатые клавиши для каждого игрока
 last_keys = [[]]
 
+# Функция для загрузки карты клавиш из CSV файла
 def map_keys(file_name, player_count):
   global semaphores
 
-  with open('maps/' + (file_name or 'ddr.csv')) as csv_file:
+  with open('carts/' + (file_name or 'ddr.csv')) as csv_file:
     csv_reader = csv.reader(csv_file)
-    next(csv_reader) # skip first row
+    next(csv_reader) # Пропускаем первую строку (заголовок)
     for player_cardinal, part, position, keys, repeat, action_name in csv_reader:
-      player_index = player_count - int(player_cardinal) # reverse and 0-index
+      player_index = player_count - int(player_cardinal) # Реверс и индексация с 0
       semaphores[(player_index, part, int(position))] = {
         'keys': keys.split(' '),
         'name': action_name,
@@ -73,13 +95,16 @@ def map_keys(file_name, player_count):
       }
     print("Successfully read in:", semaphores)
 
+# Функция для вычисления угла между тремя точками
 def get_angle(a, b, c):
   ang = degrees(atan2(c['y']-b['y'], c['x']-b['x']) - atan2(a['y']-b['y'], a['x']-b['x']))
   return ang + 360 if ang < 0 else ang
 
+# Функция для проверки, отсутствует ли видимая часть ключевой точки
 def is_missing(part):
   return any(joint['visibility'] < VISIBILITY_THRESHOLD for joint in part)
 
+# Функция для проверки, указывает ли конечность в прямом направлении
 def is_limb_pointing(upper, mid, lower):
   if is_missing([upper, mid, lower]):
     return False
@@ -92,15 +117,15 @@ def is_limb_pointing(upper, mid, lower):
     return is_extended
   return False
 
+# Функция для получения направления конечности
 def get_limb_direction(arm, closest_degrees=45):
-  # should also use atan2 but I don't want to do more math
-  dy = arm[2]['y'] - arm[0]['y'] # wrist -> shoulder
+  dy = arm[2]['y'] - arm[0]['y'] # запястье -> плечо
   dx = arm[2]['x'] - arm[0]['x']
   angle = degrees(atan(dy/dx))
   if (dx < 0):
     angle += 180
 
-  # collapse to nearest closest_degrees; 45 for semaphore
+  # Округляем до ближайшего closest_degrees; 45 для семафора
   mod_close = angle % closest_degrees
   angle -= mod_close
   if mod_close > closest_degrees/2:
@@ -112,21 +137,25 @@ def get_limb_direction(arm, closest_degrees=45):
 
   return angle
 
-def is_arm_crossed(elbow, wrist, max_dist):
-  return dist.euclidean([elbow['x'], elbow['y']], [wrist['x'], wrist['y']]) < max_dist
-
+# Функция для проверки, пересекаются ли руки
 def is_arms_crossed(elbowL, wristL, elbowR, wristR, mouth_width):
   max_dist = mouth_width * ARM_CROSSED_RATIO
   return is_arm_crossed(elbowL, wristR, max_dist) and is_arm_crossed(elbowR, wristL, max_dist)
 
+# Функция для проверки, пересекается ли одна конечность с другой
+def is_arm_crossed(elbow, wrist, max_dist):
+  return dist.euclidean([elbow['x'], elbow['y']], [wrist['x'], wrist['y']]) < max_dist
+
+# Функция для проверки, поднята ли нога
 def is_leg_lifted(leg):
   if is_missing(leg):
     return False
-  dy = leg[1]['y'] - leg[0]['y'] # knee -> hip
+  dy = leg[1]['y'] - leg[0]['y'] # колено -> бедро
   dx = leg[1]['x'] - leg[0]['x']
   angle = degrees(atan2(dy, dx))
   return angle > LEG_LIFT_MIN
 
+# Функция для проверки, выполняется ли прыжок
 def is_jumping(i, hipL, hipR):
   global last_frames
 
@@ -138,18 +167,19 @@ def is_jumping(i, hipL, hipR):
 
   if (hipL['y'] > last_frames[i][-2]['hipL_y'] + JUMP_THRESHOLD) and (
       hipR['y'] > last_frames[i][-2]['hipR_y'] + JUMP_THRESHOLD):
-    last_frames[i][-1]['hips_dy'] = 1 # rising
+    last_frames[i][-1]['hips_dy'] = 1 # подъем
   elif (hipL['y'] < last_frames[i][-2]['hipL_y'] - JUMP_THRESHOLD) and (
         hipR['y'] < last_frames[i][-2]['hipR_y'] - JUMP_THRESHOLD):
-    last_frames[i][-1]['hips_dy'] = -1 # falling
+    last_frames[i][-1]['hips_dy'] = -1 # спуск
   else:
-    last_frames[i][-1]['hips_dy'] = 0 # not significant dy
+    last_frames[i][-1]['hips_dy'] = 0 # незначительное изменение высоты
 
-  # consistently rising first half, lowering second half
+  # Поднимается постоянно в первой половине, опускается во второй половине
   jump_up = all(frame['hips_dy'] == 1 for frame in last_frames[i][:HALF_HISTORY])
   get_down = all(frame['hips_dy'] == -1 for frame in last_frames[i][HALF_HISTORY:])
   return jump_up and get_down
 
+# Функция для проверки, закрыт ли рот обоими ладонями
 def is_mouth_covered(mouth, palms):
   if is_missing(palms):
     return False
@@ -159,6 +189,7 @@ def is_mouth_covered(mouth, palms):
   dyR = (mouth[1]['y'] - palms[1]['y'])
   return all(abs(d) < MOUTH_COVER_THRESHOLD for d in [dxL, dyL, dxR, dyR])
 
+# Функция для проверки, выполняется ли приседание
 def is_squatting(hipL, kneeL, hipR, kneeR):
   if is_missing([hipL, kneeL, hipR, kneeR]):
     return False
@@ -166,6 +197,7 @@ def is_squatting(hipL, kneeL, hipR, kneeR):
   dyR = abs(hipR['y'] - kneeR['y'])
   return (dyL < SQUAT_THRESHOLD) and (dyR < SQUAT_THRESHOLD)
 
+# Функция для обработки сопоставления и ввода клавиш
 def match_and_type(player_num, parts_and_actions, image, display_only):
   global semaphores, last_keys
 
@@ -191,6 +223,7 @@ def match_and_type(player_num, parts_and_actions, image, display_only):
   output(new_keys_to_repeat, last_keys[player_num], True, image, display_only)
   last_keys[player_num] = all_new_keys
 
+# Функция для вывода клавиш в консоль или на изображение
 def output(keys, previous_keys, repeat, image, display_only):
   for hotkey in keys:
     keystring = '+'.join(key for key in hotkey if key not in previous_keys)
@@ -206,124 +239,139 @@ def output(keys, previous_keys, repeat, image, display_only):
           print("pressing:", keystring)
           keyboard.press(keystring)
 
+# Функция для отображения изображения и, при необходимости, завершения программы
 def render_and_maybe_exit(image, recording):
   cv2.imshow('Semaphore Games', image)
   if recording:
     recording.write(image)
   return cv2.waitKey(5) & 0xFF == 27
 
+# Функция для обработки поз
 def process_poses(image, pose_models, draw_landmarks, flip, display_only):
-  global last_frames, frame_midpoint, last_keys
+    global last_frames, frame_midpoint, last_keys
 
-  image.flags.writeable = False
-  image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    # Преобразование изображения в цветовую схему RGB для mediapipe
+    image.flags.writeable = False
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-  width = image.shape[1]
-  splits = len(pose_models)
-  split_len = width // splits
-  images = [image[:, i:i+split_len] for i in range(0, width, split_len)]
+    # Разделение изображения на несколько частей в зависимости от числа pose_models
+    width = image.shape[1]
+    splits = len(pose_models)
+    split_len = width // splits
+    images = [image[:, i:i+split_len] for i in range(0, width, split_len)]
 
-  for mark in range(0, width, split_len):
-    cv2.line(image, (mark,0), (mark,width), (255,255,255), 1)
+    # Отрисовка разделительных линий на изображении
+    for mark in range(0, width, split_len):
+        cv2.line(image, (mark, 0), (mark, width), (255, 255, 255), 1)
 
-  pose_results = [pose_models[i].process(images[i]) for i in range(0, splits)]
+    # Обработка поз для каждой части изображения
+    pose_results = [pose_models[i].process(images[i]) for i in range(0, splits)]
 
-  if draw_landmarks:
-    for i, image in enumerate(images):
-      mp.solutions.drawing_utils.draw_landmarks(
-        image,
-        pose_results[i].pose_landmarks,
-        mp.solutions.pose.POSE_CONNECTIONS,
-        DEFAULT_LANDMARKS_STYLE)
+    # Отрисовка landmarks, если необходимо
+    if draw_landmarks:
+        for i, image in enumerate(images):
+            mp.solutions.drawing_utils.draw_landmarks(
+                image,
+                pose_results[i].pose_landmarks,
+                mp.solutions.pose.POSE_CONNECTIONS,
+                DEFAULT_LANDMARKS_STYLE)
 
-  image = concatenate(images, axis=1)
-  image.flags.writeable = True
-  image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    # Объединение изображений обратно в одно
+    image = concatenate(images, axis=1)
+    image.flags.writeable = True
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
-  if flip: # selfie view
-    image = cv2.flip(image, 1)
+    # Отражение изображения, если установлен параметр flip
+    if flip:
+        image = cv2.flip(image, 1)
 
-  for player_num, pose_result in enumerate(pose_results):
-    actions = []
+    # Обработка действий на основе поз для каждого игрока
+    for player_num, pose_result in enumerate(pose_results):
+        actions = []
 
-    if pose_result.pose_landmarks:
-      # prepare to store most recent frame of movement updates over time
-      last_frames[player_num] = last_frames[player_num][1:] + [empty_frame.copy()]
+        if pose_result.pose_landmarks:
+            # Подготовка для хранения последних кадров движения в течение некоторого времени
+            last_frames[player_num] = last_frames[player_num][1:] + [empty_frame.copy()]
 
-      body = []
-      # (0,0) bottom left to (1,1) top right
-      for point in pose_result.pose_landmarks.landmark:
-        body.append({
-          'x': 1 - point.x,
-          'y': 1 - point.y,
-          'visibility': point.visibility
-        })
+            body = []
+            # Преобразование координат landmarks в относительные координаты
+            for point in pose_result.pose_landmarks.landmark:
+                body.append({
+                    'x': 1 - point.x,
+                    'y': 1 - point.y,
+                    'visibility': point.visibility
+                })
 
-      kneeL, kneeR = body[25], body[26]
-      hipL, hipR = body[23], body[24]
-      legL = (hipL, kneeL, body[27]) # + ankle
-      legR = (hipR, kneeR, body[28]) # + ankle
+            kneeL, kneeR = body[25], body[26]
+            hipL, hipR = body[23], body[24]
+            legL = (hipL, kneeL, body[27])  # + ankle
+            legR = (hipR, kneeR, body[28])  # + ankle
 
-      if is_squatting(hipL, kneeL, hipR, kneeR):
-        # squat (hips <> knees ~horizontal)
-        actions += [('squat', 1)]
-      elif is_leg_lifted(legL): # one hip <> knee ~horizontal
-        actions += [('left leg', 2)]
-      elif is_leg_lifted(legR):
-        actions += [('right leg', 2)]
-      else:
-        # leg extension angles
-        if is_limb_pointing(*legL) and is_limb_pointing(*legR):
-          legL_angle = get_limb_direction(legL, LEG_EXTEND_ANGLE)
-          legR_angle = get_limb_direction(legR, LEG_EXTEND_ANGLE)
-          is_right, is_high = leg_extension_angles.get((legL_angle, legR_angle), (None, None))
-          if is_high is not None:
-            which_leg = ('right' if is_right else 'left') + ' leg'
-            actions += [(which_leg, is_high)]
+            if is_squatting(hipL, kneeL, hipR, kneeR):
+                # squat (hips <> knees ~horizontal)
+                actions += [('squat', 1)]
+            elif is_leg_lifted(legL):  # одна нога поднята ~горизонтально
+                actions += [('left leg', 2)]
+            elif is_leg_lifted(legR):
+                actions += [('right leg', 2)]
+            else:
+                # углы разогнутости ног
+                if is_limb_pointing(*legL) and is_limb_pointing(*legR):
+                    legL_angle = get_limb_direction(legL, LEG_EXTEND_ANGLE)
+                    legR_angle = get_limb_direction(legR, LEG_EXTEND_ANGLE)
+                    is_right, is_high = leg_extension_angles.get((legL_angle, legR_angle), (None, None))
+                    if is_high is not None:
+                        which_leg = ('right' if is_right else 'left') + ' leg'
+                        actions += [(which_leg, is_high)]
 
-      # jump (hips rise + fall)
-      if is_jumping(player_num, hipL, hipR):
-        actions += [('jump', 1)]
+            # jump (подъем и опускание бедер)
+            if is_jumping(player_num, hipL, hipR):
+                actions += [('jump', 1)]
 
-      # mouth covered by both palms
-      mouth = (body[9], body[10])
-      palms = (body[19], body[20])
-      if is_mouth_covered(mouth, palms):
-        actions += [('mouth', 1)]
+            # рот закрыт обеими ладонями
+            mouth = (body[9], body[10])
+            palms = (body[19], body[20])
+            if is_mouth_covered(mouth, palms):
+                actions += [('mouth', 1)]
 
-      # arms crossed: wrists near opposite elbows
-      shoulderL, elbowL, wristL = body[11], body[13], body[15]
-      armL = (shoulderL, elbowL, wristL)
-      shoulderR, elbowR, wristR = body[12], body[14], body[16]
-      armR = (shoulderR, elbowR, wristR)
-      mouth_width = abs(mouth[1]['x']-mouth[0]['x'])
-      if is_arms_crossed(elbowL, wristL, elbowR, wristR, mouth_width):
-        actions += [('crossed arms', 1)]
+            # руки перекрещены: запястья близки к противоположным локтям
+            shoulderL, elbowL, wristL = body[11], body[13], body[15]
+            armL = (shoulderL, elbowL, wristL)
+            shoulderR, elbowR, wristR = body[12], body[14], body[16]
+            armR = (shoulderR, elbowR, wristR)
+            mouth_width = abs(mouth[1]['x'] - mouth[0]['x'])
+            if is_arms_crossed(elbowL, wristL, elbowR, wristR, mouth_width):
+                actions += [('crossed arms', 1)]
 
-      # single arm extension angles
-      for (arm, is_right) in [(armL, False), (armR, True)]:
-        if is_limb_pointing(*arm):
-          arm_angle = get_limb_direction(arm)
-          which_arm = ('right' if is_right else 'left') + ' arm'
-          actions += [(which_arm, arm_angle)]
+            # углы разогнутости одной руки
+            for (arm, is_right) in [(armL, False), (armR, True)]:
+                if is_limb_pointing(*arm):
+                    arm_angle = get_limb_direction(arm)
+                    which_arm = ('right' if is_right else 'left') + ' arm'
+                    actions += [(which_arm, arm_angle)]
 
-    if actions or last_keys[player_num]:
-      match_and_type(player_num, actions, image, display_only)
+        # Обработка действий и нажатия клавиш
+        if actions or last_keys[player_num]:
+            match_and_type(player_num, actions, image, display_only)
 
-  return image
+    return image
 
 
+
+# главная
 def main():
   global last_frames, last_keys, frame_midpoint
 
+  # Парсинг аргументов командной строки
   parser = argparse.ArgumentParser()
   parser.add_argument('--map', '-m', help='File to import for mapped keys')
   parser.add_argument('--input', '-i', help='Input video device or file (number or path), defaults to 0', default='0')
   parser.add_argument('--flip', '-f', help='Set to any value to flip resulting output (selfie view)')
   parser.add_argument('--landmarks', '-l', help='Set to any value to draw body landmarks')
-  parser.add_argument('--record', '-r', help='Set to any value to save a timestamped AVI in current directory')
+  parser.add_argument('--record', '-r', help='Set to any value to save a timestamped AVI in the current directory')
   parser.add_argument('--display', '-d', help='Set to any value to only visually display output rather than type')
-  parser.add_argument('--split', '-s', help='Split the screen into a positive integer of separate regions, defaults to 1', default='1')
+  parser.add_argument('--split', '-s',
+                      help='Split the screen into a positive integer of separate regions, defaults to 1', default='1')
   args = parser.parse_args()
 
   INPUT = int(args.input) if args.input.isdigit() else args.input
@@ -333,38 +381,51 @@ def main():
   DISPLAY_ONLY = args.display is not None
   SPLIT = int(args.split)
 
+  # Инициализация переменных для каждого "раздела" изображения
   last_frames = SPLIT * [last_frames.copy()]
   last_keys = SPLIT * [[]]
 
+  # Захват видео
   cap = cv2.VideoCapture(INPUT)
 
+  # Получение размера кадра и середины кадра
   frame_size = (int(cap.get(3)), int(cap.get(4)))
-  frame_midpoint = (int(frame_size[0]/2), int(frame_size[1]/2))
+  frame_midpoint = (int(frame_size[0] / 2), int(frame_size[1] / 2))
 
+  # Инициализация записи видео, если указано
   recording = cv2.VideoWriter(RECORDING_FILENAME,
-    cv2.VideoWriter_fourcc(*'MJPG'), FPS, frame_size) if RECORDING else None
+                              cv2.VideoWriter_fourcc(*'MJPG'), FPS, frame_size) if RECORDING else None
 
+  # Загрузка карты клавиш для каждого "раздела"
   MAP_FILE = args.map
   map_keys(MAP_FILE, SPLIT)
 
+  # Инициализация mediapipe.pose для каждого "раздела"
   with ExitStack() as stack:
-    pose_models = SPLIT*[stack.enter_context(mp.solutions.pose.Pose())]
+    pose_models = SPLIT * [stack.enter_context(mp.solutions.pose.Pose())]
 
+    # Обработка каждого кадра видео
     while cap.isOpened():
       success, image = cap.read()
-      if not success: break
+      if not success:
+        break
 
+      # Обработка поз и отображение результата
       image = process_poses(image, pose_models, DRAW_LANDMARKS, FLIP, DISPLAY_ONLY)
 
+      # Проверка наличия команды завершения от пользователя
       if render_and_maybe_exit(image, recording):
         break
 
+  # Завершение записи видео
   if RECORDING:
     recording.release()
 
+  # Освобождение видеозахвата и закрытие окон OpenCV
   cap.release()
   cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
-    main()
+  main()
+
