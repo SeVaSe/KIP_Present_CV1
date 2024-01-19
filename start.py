@@ -2,7 +2,7 @@ import argparse
 from contextlib import ExitStack
 import csv
 
-import keyboard # local fork
+import keyboard
 
 import mediapipe as mp
 import cv2
@@ -52,9 +52,9 @@ LEG_EXTEND_ANGLE = 18
 # Словарь углов расширения ног для определения ноги и ее положения
 leg_extension_angles = {
   (-90, -90 + LEG_EXTEND_ANGLE): (True, 0),  # правая нога, низкая
-  (-90, -90 + 2*LEG_EXTEND_ANGLE): (True, 1), # правая нога, высокая
+  (-90, -90 + 2*LEG_EXTEND_ANGLE): (True, 1),  # правая нога, высокая
   (270 - LEG_EXTEND_ANGLE, -90): (False, 0),  # левая нога, низкая
-  (270 - 2*LEG_EXTEND_ANGLE, -90): (False, 1), # левая нога, высокая
+  (270 - 2*LEG_EXTEND_ANGLE, -90): (False, 1),  # левая нога, высокая
 }
 
 # Количество последних кадров, используемых для анализа движений
@@ -117,127 +117,164 @@ def is_limb_pointing(upper, mid, lower):
     return is_extended
   return False
 
+
 # Функция для получения направления конечности
 def get_limb_direction(arm, closest_degrees=45):
-  dy = arm[2]['y'] - arm[0]['y'] # запястье -> плечо
+  # Рассчитываем угол между запястьем и плечом
+  dy = arm[2]['y'] - arm[0]['y']  # запястье -> плечо
   dx = arm[2]['x'] - arm[0]['x']
-  angle = degrees(atan(dy/dx))
-  if (dx < 0):
+  angle = degrees(atan(dy / dx))
+
+  # Корректируем угол для отрицательных значений (левая сторона)
+  if dx < 0:
     angle += 180
 
-  # Округляем до ближайшего closest_degrees; 45 для семафора
+  # Округляем угол до ближайшего closest_degrees; 45 для семафора
   mod_close = angle % closest_degrees
   angle -= mod_close
-  if mod_close > closest_degrees/2:
+  if mod_close > closest_degrees / 2:
     angle += closest_degrees
 
   angle = int(angle)
+
+  # Преобразуем 270 градусов в -90 градусов для удобства интерпретации
   if angle == 270:
     angle = -90
 
   return angle
 
+
 # Функция для проверки, пересекаются ли руки
 def is_arms_crossed(elbowL, wristL, elbowR, wristR, mouth_width):
+  # Максимальное расстояние, на котором руки считаются пересекающимися
   max_dist = mouth_width * ARM_CROSSED_RATIO
+
+  # Проверка пересечения левой руки с правой и наоборот
   return is_arm_crossed(elbowL, wristR, max_dist) and is_arm_crossed(elbowR, wristL, max_dist)
+
 
 # Функция для проверки, пересекается ли одна конечность с другой
 def is_arm_crossed(elbow, wrist, max_dist):
+  # Проверка, находится ли запястье на достаточном расстоянии от локтя
   return dist.euclidean([elbow['x'], elbow['y']], [wrist['x'], wrist['y']]) < max_dist
+
 
 # Функция для проверки, поднята ли нога
 def is_leg_lifted(leg):
   if is_missing(leg):
     return False
-  dy = leg[1]['y'] - leg[0]['y'] # колено -> бедро
+
+  # Рассчитываем угол между коленом и бедром
+  dy = leg[1]['y'] - leg[0]['y']  # колено -> бедро
   dx = leg[1]['x'] - leg[0]['x']
   angle = degrees(atan2(dy, dx))
+
+  # Проверка, поднята ли нога
   return angle > LEG_LIFT_MIN
+
 
 # Функция для проверки, выполняется ли прыжок
 def is_jumping(i, hipL, hipR):
-  global last_frames
+    global last_frames
 
-  if is_missing([hipL, hipR]):
-    return False
+    if is_missing([hipL, hipR]):
+        return False
 
-  last_frames[i][-1]['hipL_y'] = hipL['y']
-  last_frames[i][-1]['hipR_y'] = hipR['y']
+    # Запоминание текущей высоты бедра для последующего сравнения
+    last_frames[i][-1]['hipL_y'] = hipL['y']
+    last_frames[i][-1]['hipR_y'] = hipR['y']
 
-  if (hipL['y'] > last_frames[i][-2]['hipL_y'] + JUMP_THRESHOLD) and (
-      hipR['y'] > last_frames[i][-2]['hipR_y'] + JUMP_THRESHOLD):
-    last_frames[i][-1]['hips_dy'] = 1 # подъем
-  elif (hipL['y'] < last_frames[i][-2]['hipL_y'] - JUMP_THRESHOLD) and (
-        hipR['y'] < last_frames[i][-2]['hipR_y'] - JUMP_THRESHOLD):
-    last_frames[i][-1]['hips_dy'] = -1 # спуск
-  else:
-    last_frames[i][-1]['hips_dy'] = 0 # незначительное изменение высоты
+    # Проверка, поднимаются или опускаются бедра по сравнению с предыдущими кадрами
+    if (hipL['y'] > last_frames[i][-2]['hipL_y'] + JUMP_THRESHOLD) and (
+            hipR['y'] > last_frames[i][-2]['hipR_y'] + JUMP_THRESHOLD):
+        last_frames[i][-1]['hips_dy'] = 1  # подъем
+    elif (hipL['y'] < last_frames[i][-2]['hipL_y'] - JUMP_THRESHOLD) and (
+            hipR['y'] < last_frames[i][-2]['hipR_y'] - JUMP_THRESHOLD):
+        last_frames[i][-1]['hips_dy'] = -1  # спуск
+    else:
+        last_frames[i][-1]['hips_dy'] = 0  # незначительное изменение высоты
 
-  # Поднимается постоянно в первой половине, опускается во второй половине
-  jump_up = all(frame['hips_dy'] == 1 for frame in last_frames[i][:HALF_HISTORY])
-  get_down = all(frame['hips_dy'] == -1 for frame in last_frames[i][HALF_HISTORY:])
-  return jump_up and get_down
+    # Проверка выполнения прыжка (подъем в первой половине и спуск во второй половине истории)
+    jump_up = all(frame['hips_dy'] == 1 for frame in last_frames[i][:HALF_HISTORY])
+    get_down = all(frame['hips_dy'] == -1 for frame in last_frames[i][HALF_HISTORY:])
+    return jump_up and get_down
+
 
 # Функция для проверки, закрыт ли рот обоими ладонями
 def is_mouth_covered(mouth, palms):
-  if is_missing(palms):
-    return False
-  dxL = (mouth[0]['x'] - palms[0]['x'])
-  dyL = (mouth[0]['y'] - palms[0]['y'])
-  dxR = (mouth[1]['x'] - palms[1]['x'])
-  dyR = (mouth[1]['y'] - palms[1]['y'])
-  return all(abs(d) < MOUTH_COVER_THRESHOLD for d in [dxL, dyL, dxR, dyR])
+    if is_missing(palms):
+        return False
+
+    # Расчет разницы в координатах между ртом и ладонями
+    dxL = (mouth[0]['x'] - palms[0]['x'])
+    dyL = (mouth[0]['y'] - palms[0]['y'])
+    dxR = (mouth[1]['x'] - palms[1]['x'])
+    dyR = (mouth[1]['y'] - palms[1]['y'])
+
+    # Проверка, находится ли рот между ладонями
+    return all(abs(d) < MOUTH_COVER_THRESHOLD for d in [dxL, dyL, dxR, dyR])
+
 
 # Функция для проверки, выполняется ли приседание
 def is_squatting(hipL, kneeL, hipR, kneeR):
-  if is_missing([hipL, kneeL, hipR, kneeR]):
-    return False
-  dyL = abs(hipL['y'] - kneeL['y'])
-  dyR = abs(hipR['y'] - kneeR['y'])
-  return (dyL < SQUAT_THRESHOLD) and (dyR < SQUAT_THRESHOLD)
+    if is_missing([hipL, kneeL, hipR, kneeR]):
+        return False
 
-# Функция для обработки сопоставления и ввода клавиш
+    # Расчет вертикального расстояния между бедром и коленом
+    dyL = abs(hipL['y'] - kneeL['y'])
+    dyR = abs(hipR['y'] - kneeR['y'])
+
+    # Проверка, находятся ли бедра и колени на достаточном расстоянии друг от друга
+    return (dyL < SQUAT_THRESHOLD) and (dyR < SQUAT_THRESHOLD)
+
+
+
+# Функция для сопоставления действий и ввода клавиш
 def match_and_type(player_num, parts_and_actions, image, display_only):
-  global semaphores, last_keys
+    global semaphores, last_keys
 
-  new_keys = []
-  new_keys_to_repeat = []
+    new_keys = []               # Новые клавиши для нажатия
+    new_keys_to_repeat = []      # Новые клавиши для повторного нажатия
 
-  for (part_or_action, position) in parts_and_actions:
-    match = semaphores.get((player_num, part_or_action, position), '')
-    if match:
-      if match.get('repeat'):
-        new_keys_to_repeat += [match.get('keys', '')]
-      else:
-        new_keys += [match.get('keys', '')]
+    # Проверка каждой части или действия и получение соответствующих клавиш из словаря semaphores
+    for (part_or_action, position) in parts_and_actions:
+        match = semaphores.get((player_num, part_or_action, position), '')
+        if match:
+            if match.get('repeat'):
+                new_keys_to_repeat += [match.get('keys', '')]
+            else:
+                new_keys += [match.get('keys', '')]
 
-  all_new_keys = new_keys + new_keys_to_repeat
+    all_new_keys = new_keys + new_keys_to_repeat
 
-  for hotkey in last_keys[player_num]:
-    if (hotkey not in all_new_keys):
-      print("releasing:", hotkey)
-      keyboard.release(hotkey)
+    # Отпускание клавиш, которые больше не активны
+    for hotkey in last_keys[player_num]:
+        if hotkey not in all_new_keys:
+            print("releasing:", hotkey)
+            keyboard.release(hotkey)
 
-  output(new_keys, last_keys[player_num], False, image, display_only)
-  output(new_keys_to_repeat, last_keys[player_num], True, image, display_only)
-  last_keys[player_num] = all_new_keys
+    # Вывод клавиш в консоль или на изображение
+    output(new_keys, last_keys[player_num], False, image, display_only)
+    output(new_keys_to_repeat, last_keys[player_num], True, image, display_only)
+    last_keys[player_num] = all_new_keys
 
 # Функция для вывода клавиш в консоль или на изображение
 def output(keys, previous_keys, repeat, image, display_only):
-  for hotkey in keys:
-    keystring = '+'.join(key for key in hotkey if key not in previous_keys)
-    if len(keystring):
-      if display_only:
-        cv2.putText(image, keystring, frame_midpoint,
-          cv2.FONT_HERSHEY_SIMPLEX, 20, (0,0,255), 20)
-      else:
-        if repeat:
-          print("REPEAT: press & release", keystring)
-          keyboard.press_and_release(keystring)
-        else:
-          print("pressing:", keystring)
-          keyboard.press(keystring)
+    for hotkey in keys:
+        keystring = '+'.join(key for key in hotkey if key not in previous_keys)
+        if len(keystring):
+            if display_only:
+                # Отображение текста на изображении
+                cv2.putText(image, keystring, frame_midpoint,
+                            cv2.FONT_HERSHEY_SIMPLEX, 20, (0, 0, 255), 20)
+            else:
+                if repeat:
+                    print("REPEAT: press & release", keystring)
+                    keyboard.press_and_release(keystring)
+                else:
+                    print("pressing:", keystring)
+                    keyboard.press(keystring)
+
 
 # Функция для отображения изображения и, при необходимости, завершения программы
 def render_and_maybe_exit(image, recording):
@@ -245,6 +282,7 @@ def render_and_maybe_exit(image, recording):
   if recording:
     recording.write(image)
   return cv2.waitKey(5) & 0xFF == 27
+
 
 # Функция для обработки поз
 def process_poses(image, pose_models, draw_landmarks, flip, display_only):
