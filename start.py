@@ -260,24 +260,50 @@ def is_squatting(hipL, kneeL, hipR, kneeR):
 
 
 
+import time  # Добавьте этот импорт в начало вашего кода
+
+def match_and_type(player_num, parts_and_actions, image, display_only):
+    global semaphores, last_keys
+
+    new_keys = []
+    new_keys_to_repeat = []
+
+    for (part_or_action, position) in parts_and_actions:
+        match = semaphores.get((player_num, part_or_action, position), '')
+        if match:
+            if match.get('repeat'):
+                new_keys_to_repeat += [match.get('keys', '')]
+            else:
+                new_keys += [match.get('keys', '')]
+
+    all_new_keys = new_keys + new_keys_to_repeat
+
+    for hotkey in last_keys[player_num]:
+        if (hotkey not in all_new_keys):
+            print("releasing:", hotkey)
+            keyboard.release(hotkey)
+
+    if all_new_keys and all_new_keys != last_keys[player_num]:
+        output(all_new_keys, last_keys[player_num], False, image, display_only)
+
+    last_keys[player_num] = all_new_keys
 
 
-# Функция для вывода клавиш в консоль или на изображение
 def output(keys, previous_keys, repeat, image, display_only):
     for hotkey in keys:
         keystring = '+'.join(key for key in hotkey if key not in previous_keys)
         if len(keystring):
-            if display_only:
-                # Отображение текста на изображении
-                cv2.putText(image, keystring, frame_midpoint,
-                            cv2.FONT_HERSHEY_SIMPLEX, 20, (0, 0, 255), 20)
-            else:
-                if repeat:
-                    print("REPEAT: press & release", keystring)
-                    keyboard.press_and_release(keystring)
+            if not repeat and keystring not in previous_keys:
+                if display_only:
+                    cv2.putText(image, keystring, frame_midpoint,
+                                cv2.FONT_HERSHEY_SIMPLEX, 20, (0, 0, 255), 20)
                 else:
                     print("pressing:", keystring)
                     keyboard.press(keystring)
+                    time.sleep(3)  # Добавленная задержка в 3 секунды
+            elif repeat:
+                print("REPEAT: press & release", keystring)
+                keyboard.press_and_release(keystring)
 
 
 # Функция для отображения изображения и, при необходимости, завершения программы
