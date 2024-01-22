@@ -70,13 +70,13 @@ empty_frame = {
   'hips_dy': 0,
 }
 
-# История последних кадров для каждого игрока
+# История последних кадров для каждого спикера
 last_frames = FRAME_HISTORY*[empty_frame.copy()]
 
 # Середина кадра
 frame_midpoint = (0,0)
 
-# Последние нажатые клавиши для каждого игрока
+# Последние нажатые клавиши для каждого спикера
 last_keys = [[]]
 
 # Функция для загрузки карты клавиш из CSV файла
@@ -230,33 +230,37 @@ def is_squatting(hipL, kneeL, hipR, kneeR):
 
 
 # Функция для сопоставления действий и ввода клавиш
-def match_and_type(player_num, parts_and_actions, image, display_only):
-    global semaphores, last_keys
+# def match_and_type(player_num, parts_and_actions, image, display_only):
+#     global semaphores, last_keys
+#
+#     new_keys = []               # Новые клавиши для нажатия
+#     new_keys_to_repeat = []      # Новые клавиши для повторного нажатия
+#
+#     # Проверка каждой части или действия и получение соответствующих клавиш из словаря semaphores
+#     for (part_or_action, position) in parts_and_actions:
+#         match = semaphores.get((player_num, part_or_action, position), '')
+#         if match:
+#             if match.get('repeat'):
+#                 new_keys_to_repeat += [match.get('keys', '')]
+#             else:
+#                 new_keys += [match.get('keys', '')]
+#
+#     all_new_keys = new_keys + new_keys_to_repeat
+#
+#     # Отпускание клавиш, которые больше не активны
+#     for hotkey in last_keys[player_num]:
+#         if hotkey not in all_new_keys:
+#             print("releasing:", hotkey)
+#             keyboard.release(hotkey)
+#
+#     # Вывод клавиш в консоль или на изображение
+#     output(new_keys, last_keys[player_num], False, image, display_only)
+#     output(new_keys_to_repeat, last_keys[player_num], True, image, display_only)
+#     last_keys[player_num] = all_new_keys
 
-    new_keys = []               # Новые клавиши для нажатия
-    new_keys_to_repeat = []      # Новые клавиши для повторного нажатия
 
-    # Проверка каждой части или действия и получение соответствующих клавиш из словаря semaphores
-    for (part_or_action, position) in parts_and_actions:
-        match = semaphores.get((player_num, part_or_action, position), '')
-        if match:
-            if match.get('repeat'):
-                new_keys_to_repeat += [match.get('keys', '')]
-            else:
-                new_keys += [match.get('keys', '')]
 
-    all_new_keys = new_keys + new_keys_to_repeat
 
-    # Отпускание клавиш, которые больше не активны
-    for hotkey in last_keys[player_num]:
-        if hotkey not in all_new_keys:
-            print("releasing:", hotkey)
-            keyboard.release(hotkey)
-
-    # Вывод клавиш в консоль или на изображение
-    output(new_keys, last_keys[player_num], False, image, display_only)
-    output(new_keys_to_repeat, last_keys[player_num], True, image, display_only)
-    last_keys[player_num] = all_new_keys
 
 # Функция для вывода клавиш в консоль или на изображение
 def output(keys, previous_keys, repeat, image, display_only):
