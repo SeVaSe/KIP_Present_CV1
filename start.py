@@ -1,6 +1,7 @@
 import argparse
 from contextlib import ExitStack
 import csv
+import time  # Добавьте этот импорт в начало вашего кода
 
 import keyboard
 
@@ -260,7 +261,6 @@ def is_squatting(hipL, kneeL, hipR, kneeR):
 
 
 
-import time  # Добавьте этот импорт в начало вашего кода
 
 def match_and_type(player_num, parts_and_actions, image, display_only):
     global semaphores, last_keys
