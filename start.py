@@ -2,6 +2,7 @@ import argparse
 from contextlib import ExitStack
 import csv
 import time  # Добавьте этот импорт в начало вашего кода
+import numpy as np
 
 import keyboard
 
@@ -25,6 +26,7 @@ VISIBILITY_THRESHOLD = .8
 
 # Маржа для определения, вытянута ли конечность (в градусах)
 STRAIGHT_LIMB_MARGIN = 20
+person_detected = False
 
 # Длина нижней конечности в виде доли от верхней конечности
 EXTENDED_LIMB_MARGIN = .8
@@ -84,7 +86,7 @@ last_keys = [[]]
 def map_keys(file_name, player_count):
   global semaphores
 
-  with open('carts/' + (file_name or 'ddr.csv')) as csv_file:
+  with open('carts/' + (file_name or 'RL.csv')) as csv_file:
     csv_reader = csv.reader(csv_file)
     next(csv_reader) # Пропускаем первую строку (заголовок)
     for player_cardinal, part, position, keys, repeat, action_name in csv_reader:
@@ -308,7 +310,7 @@ def output(keys, previous_keys, repeat, image, display_only):
 
 # Функция для отображения изображения и, при необходимости, завершения программы
 def render_and_maybe_exit(image, recording):
-  cv2.imshow('Semaphore Games', image)
+  cv2.imshow('KIP-CV-PRES', image)
   if recording:
     recording.write(image)
   return cv2.waitKey(5) & 0xFF == 27
@@ -316,7 +318,9 @@ def render_and_maybe_exit(image, recording):
 
 # Функция для обработки поз
 def process_poses(image, pose_models, draw_landmarks, flip, display_only):
-    global last_frames, frame_midpoint, last_keys
+    global last_frames, frame_midpoint, last_keys, person_detected
+    frame_size = (int(image.shape[1]), int(image.shape[0]))
+    mp_drawing = mp.solutions.drawing_utils
 
     # Преобразование изображения в цветовую схему RGB для mediapipe
     image.flags.writeable = False
@@ -326,7 +330,7 @@ def process_poses(image, pose_models, draw_landmarks, flip, display_only):
     width = image.shape[1]
     splits = len(pose_models)
     split_len = width // splits
-    images = [image[:, i:i+split_len] for i in range(0, width, split_len)]
+    images = [image[:, i:i + split_len] for i in range(0, width, split_len)]
 
     # Отрисовка разделительных линий на изображении
     for mark in range(0, width, split_len):
@@ -338,7 +342,7 @@ def process_poses(image, pose_models, draw_landmarks, flip, display_only):
     # Отрисовка landmarks, если необходимо
     if draw_landmarks:
         for i, image in enumerate(images):
-            mp.solutions.drawing_utils.draw_landmarks(
+            mp_drawing.draw_landmarks(
                 image,
                 pose_results[i].pose_landmarks,
                 mp.solutions.pose.POSE_CONNECTIONS,
@@ -356,67 +360,112 @@ def process_poses(image, pose_models, draw_landmarks, flip, display_only):
     # Обработка действий на основе поз для каждого игрока
     for player_num, pose_result in enumerate(pose_results):
         actions = []
+        if not person_detected:
 
-        if pose_result.pose_landmarks:
-            # Подготовка для хранения последних кадров движения в течение некоторого времени
-            last_frames[player_num] = last_frames[player_num][1:] + [empty_frame.copy()]
+            if pose_result.pose_landmarks:
+                # Извлечение координат ключевых точек для определения прямоугольника вокруг всего тела
+                landmarks = pose_result.pose_landmarks.landmark
+                xs = [int(point.x * frame_size[0]) for point in landmarks]
+                ys = [int(point.y * frame_size[1]) for point in landmarks]
 
-            body = []
-            # Преобразование координат landmarks в относительные координаты
-            for point in pose_result.pose_landmarks.landmark:
-                body.append({
-                    'x': 1 - point.x,
-                    'y': 1 - point.y,
-                    'visibility': point.visibility
-                })
+                # Определение прямоугольника, охватывающего всю область тела
+                body_rect = (
+                    min(xs), min(ys),  # левая верхняя точка
+                    max(xs), max(ys)  # правая нижняя точка
+                )
 
-            kneeL, kneeR = body[25], body[26]
-            hipL, hipR = body[23], body[24]
-            legL = (hipL, kneeL, body[27])  # + ankle
-            legR = (hipR, kneeR, body[28])  # + ankle
+                # Рисование зеленого прямоугольника вокруг всего тела
+                cv2.rectangle(image, (body_rect[0], body_rect[1]), (body_rect[2], body_rect[3]), (0, 255, 0), 2)
 
-            if is_squatting(hipL, kneeL, hipR, kneeR):
-                # squat (hips <> knees ~horizontal)
-                actions += [('squat', 1)]
-            elif is_leg_lifted(legL):  # одна нога поднята ~горизонтально
-                actions += [('left leg', 2)]
-            elif is_leg_lifted(legR):
-                actions += [('right leg', 2)]
-            else:
-                # углы разогнутости ног
-                if is_limb_pointing(*legL) and is_limb_pointing(*legR):
-                    legL_angle = get_limb_direction(legL, LEG_EXTEND_ANGLE)
-                    legR_angle = get_limb_direction(legR, LEG_EXTEND_ANGLE)
-                    is_right, is_high = leg_extension_angles.get((legL_angle, legR_angle), (None, None))
-                    if is_high is not None:
-                        which_leg = ('right' if is_right else 'left') + ' leg'
-                        actions += [(which_leg, is_high)]
+                mp_drawing.draw_landmarks(image, pose_result.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS,
+                                          landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0, 100, 0), thickness=2,
+                                                                                       circle_radius=1),
+                                          connection_drawing_spec=mp_drawing.DrawingSpec(color=(0, 100, 0),
+                                                                                         thickness=2))
 
-            # jump (подъем и опускание бедер)
-            if is_jumping(player_num, hipL, hipR):
-                actions += [('jump', 1)]
+                body = []  # Удалите эту строку, так как body уже определено выше
+                right_hand_coords = None
+                left_hand_coords = None
+                # Подготовка для хранения последних кадров движения в течение некоторого времени
+                last_frames[player_num] = last_frames[player_num][1:] + [empty_frame.copy()]
+                # Остальной код оставьте без изменений
 
-            # рот закрыт обеими ладонями
-            mouth = (body[9], body[10])
-            palms = (body[19], body[20])
-            if is_mouth_covered(mouth, palms):
-                actions += [('mouth', 1)]
+                body = []
+                # Преобразование координат landmarks в относительные координаты
+                right_hand_coords = None
+                left_hand_coords = None
 
-            # руки перекрещены: запястья близки к противоположным локтям
-            shoulderL, elbowL, wristL = body[11], body[13], body[15]
-            armL = (shoulderL, elbowL, wristL)
-            shoulderR, elbowR, wristR = body[12], body[14], body[16]
-            armR = (shoulderR, elbowR, wristR)
-            mouth_width = abs(mouth[1]['x'] - mouth[0]['x'])
-            if is_arms_crossed(elbowL, wristL, elbowR, wristR, mouth_width):
-                actions += [('crossed arms', 1)]
+                # Преобразование координат landmarks в относительные координаты
+                for point in pose_result.pose_landmarks.landmark:
+                    body.append({
+                        'x': 1 - point.x,
+                        'y': 1 - point.y,
+                        'visibility': point.visibility
+                    })
+                    if point == pose_result.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_WRIST]:
+                        right_hand_coords = (int(point.x * frame_size[0]), int(point.y * frame_size[1]))
 
-            # углы разогнутости одной руки
-            for (arm, is_right) in [(armL, False), (armR, True)]:
-                if is_limb_pointing(*arm):
-                    arm_angle = get_limb_direction(arm)
-                    which_arm = ('right' if is_right else 'left') + ' arm'
-                    actions += [(which_arm, arm_angle)]
+                    if point == pose_result.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_WRIST]:
+                        left_hand_coords = (int(point.x * frame_size[0]), int(point.y * frame_size[1]))
+
+                # После обработки всех ключевых точек для каждого игрока
+                if right_hand_coords:
+                    cv2.rectangle(image, (right_hand_coords[0] - 50, right_hand_coords[1] - 50),
+                                  (right_hand_coords[0] + 50, right_hand_coords[1] + 50), (255, 0, 0),
+                                  2)  # Синие контуры
+
+                if left_hand_coords:
+                    cv2.rectangle(image, (left_hand_coords[0] - 50, left_hand_coords[1] - 50),
+                                  (left_hand_coords[0] + 50, left_hand_coords[1] + 50), (0, 0, 255),
+                                  2)  # Красные контуры
+
+                kneeL, kneeR = body[25], body[26]
+                hipL, hipR = body[23], body[24]
+                legL = (hipL, kneeL, body[27])  # + ankle
+                legR = (hipR, kneeR, body[28])  # + ankle
+
+                if is_squatting(hipL, kneeL, hipR, kneeR):
+                    # squat (hips <> knees ~horizontal)
+                    actions += [('squat', 1)]
+                elif is_leg_lifted(legL):  # одна нога поднята ~горизонтально
+                    actions += [('left leg', 2)]
+                elif is_leg_lifted(legR):
+                    actions += [('right leg', 2)]
+                else:
+                    # углы разогнутости ног
+                    if is_limb_pointing(*legL) and is_limb_pointing(*legR):
+                        legL_angle = get_limb_direction(legL, LEG_EXTEND_ANGLE)
+                        legR_angle = get_limb_direction(legR, LEG_EXTEND_ANGLE)
+                        is_right, is_high = leg_extension_angles.get((legL_angle, legR_angle), (None, None))
+                        if is_high is not None:
+                            which_leg = ('right' if is_right else 'left') + ' leg'
+                            actions += [(which_leg, is_high)]
+
+                # jump (подъем и опускание бедер)
+                if is_jumping(player_num, hipL, hipR):
+                    actions += [('jump', 1)]
+
+                # рот закрыт обеими ладонями
+                mouth = (body[9], body[10])
+                palms = (body[19], body[20])
+                if is_mouth_covered(mouth, palms):
+                    actions += [('mouth', 1)]
+
+                # руки перекрещены: запястья близки к противоположным локтям
+                shoulderL, elbowL, wristL = body[11], body[13], body[15]
+                armL = (shoulderL, elbowL, wristL)
+                shoulderR, elbowR, wristR = body[12], body[14], body[16]
+                armR = (shoulderR, elbowR, wristR)
+                mouth_width = abs(mouth[1]['x'] - mouth[0]['x'])
+                if is_arms_crossed(elbowL, wristL, elbowR, wristR, mouth_width):
+                    actions += [('crossed arms', 1)]
+
+                # углы разогнутости одной руки
+                for (arm, is_right) in [(armL, False), (armR, True)]:
+                    if is_limb_pointing(*arm):
+                        arm_angle = get_limb_direction(arm)
+                        which_arm = ('right' if is_right else 'left') + ' arm'
+                        actions += [(which_arm, arm_angle)]
 
         # Обработка действий и нажатия клавиш
         if actions or last_keys[player_num]:
