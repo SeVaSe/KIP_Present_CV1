@@ -302,7 +302,7 @@ def output(keys, previous_keys, repeat, image, display_only):
                 else:
                     print("pressing:", keystring)
                     keyboard.press(keystring)
-                    time.sleep(3)  # Добавленная задержка в 3 секунды
+                    time.sleep(1)  # Добавленная задержка в 3 секунды
             elif repeat:
                 print("REPEAT: press & release", keystring)
                 keyboard.press_and_release(keystring)
