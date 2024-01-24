@@ -310,17 +310,23 @@ def output(keys, previous_keys, repeat, image, display_only):
 
 # Функция для отображения изображения и, при необходимости, завершения программы
 def render_and_maybe_exit(image, recording):
+
   cv2.imshow('KIP-CV-PRES', image)
   if recording:
     recording.write(image)
   return cv2.waitKey(5) & 0xFF == 27
 
+def draw_line(image, point1, point2, color):
+    cv2.line(image, point1, point2, color, 6)
 
 # Функция для обработки поз
 def process_poses(image, pose_models, draw_landmarks, flip, display_only):
     global last_frames, frame_midpoint, last_keys, person_detected
     frame_size = (int(image.shape[1]), int(image.shape[0]))
     mp_drawing = mp.solutions.drawing_utils
+
+    h, w, c = image.shape
+    mp_holistic = mp.solutions.holistic
 
     # Преобразование изображения в цветовую схему RGB для mediapipe
     image.flags.writeable = False
@@ -375,17 +381,16 @@ def process_poses(image, pose_models, draw_landmarks, flip, display_only):
                 )
 
                 # Рисование зеленого прямоугольника вокруг всего тела
-                cv2.rectangle(image, (body_rect[0], body_rect[1]), (body_rect[2], body_rect[3]), (0, 255, 0), 2)
+                cv2.rectangle(image, (body_rect[0], body_rect[1]), (body_rect[2], body_rect[3]), (0, 255, 0), 3)
+                cv2.putText(image, "СПИКЕР", (body_rect[0] - 40, body_rect[1]-20),
+                            cv2.FONT_HERSHEY_COMPLEX, 1, (37, 156, 0), 2)
 
                 mp_drawing.draw_landmarks(image, pose_result.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS,
-                                          landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0, 100, 0), thickness=2,
+                                          landmark_drawing_spec=mp_drawing.DrawingSpec(color=(255, 225, 0), thickness=2,
                                                                                        circle_radius=1),
-                                          connection_drawing_spec=mp_drawing.DrawingSpec(color=(0, 100, 0),
+                                          connection_drawing_spec=mp_drawing.DrawingSpec(color=(255, 246, 117),
                                                                                          thickness=2))
 
-                body = []  # Удалите эту строку, так как body уже определено выше
-                right_hand_coords = None
-                left_hand_coords = None
                 # Подготовка для хранения последних кадров движения в течение некоторого времени
                 last_frames[player_num] = last_frames[player_num][1:] + [empty_frame.copy()]
                 # Остальной код оставьте без изменений
@@ -408,16 +413,50 @@ def process_poses(image, pose_models, draw_landmarks, flip, display_only):
                     if point == pose_result.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_WRIST]:
                         left_hand_coords = (int(point.x * frame_size[0]), int(point.y * frame_size[1]))
 
-                # После обработки всех ключевых точек для каждого игрока
+                # После обработки всех ключевых точек для каждого спикера
                 if right_hand_coords:
-                    cv2.rectangle(image, (right_hand_coords[0] - 50, right_hand_coords[1] - 50),
-                                  (right_hand_coords[0] + 50, right_hand_coords[1] + 50), (255, 0, 0),
-                                  2)  # Синие контуры
+                    # cv2.rectangle(image, (right_hand_coords[0] - 50, right_hand_coords[1] - 50),
+                    #               (right_hand_coords[0] + 50, right_hand_coords[1] + 50), (255, 0, 0),
+                    #               2)
+
+                    cv2.circle(image, (right_hand_coords[0], right_hand_coords[1]), 50, (255, 0, 0), 3) # Синие контуры
+
+                    cv2.putText(image, "Правая", (right_hand_coords[0] - 40, right_hand_coords[1] - 60),
+                                cv2.FONT_HERSHEY_COMPLEX, 1, (37, 156, 0), 2)
+
+                    point_11 = (int(landmarks[mp_holistic.PoseLandmark.RIGHT_SHOULDER].x * w),
+                                int(landmarks[mp_holistic.PoseLandmark.RIGHT_SHOULDER].y * h))
+                    point_13 = (int(landmarks[mp_holistic.PoseLandmark.RIGHT_ELBOW].x * w),
+                                int(landmarks[mp_holistic.PoseLandmark.RIGHT_ELBOW].y * h))
+                    point_15 = (int(landmarks[mp_holistic.PoseLandmark.RIGHT_WRIST].x * w),
+                                int(landmarks[mp_holistic.PoseLandmark.RIGHT_WRIST].y * h))
+
+                    draw_line(image, point_11, point_13, (242, 90, 92))  # Линия от плеча до точки 12 на правой руке
+                    draw_line(image, point_11, point_13,
+                              (242, 90, 92))  # Линия от точки 12 до точки 14 на правой руке
+                    draw_line(image, point_13, point_15,
+                              (242, 90, 92))  # Линия от точки 14 до точки 16 на правой руке
 
                 if left_hand_coords:
-                    cv2.rectangle(image, (left_hand_coords[0] - 50, left_hand_coords[1] - 50),
-                                  (left_hand_coords[0] + 50, left_hand_coords[1] + 50), (0, 0, 255),
-                                  2)  # Красные контуры
+                    # cv2.rectangle(image, (left_hand_coords[0] - 50, left_hand_coords[1] - 50),
+                    #               (left_hand_coords[0] + 50, left_hand_coords[1] + 50), (0, 0, 255),
+                    #               2)
+
+                    cv2.circle(image, (left_hand_coords[0], left_hand_coords[1]), 50, (0, 0, 255), 2) # Красные контуры
+
+                    cv2.putText(image, "Левая", (left_hand_coords[0] - 40, left_hand_coords[1] - 60),
+                                cv2.FONT_HERSHEY_COMPLEX, 1, (37, 156, 0), 2)
+
+                    point_12 = (int(landmarks[mp_holistic.PoseLandmark.LEFT_SHOULDER].x * w),
+                                int(landmarks[mp_holistic.PoseLandmark.LEFT_SHOULDER].y * h))
+                    point_14 = (int(landmarks[mp_holistic.PoseLandmark.LEFT_ELBOW].x * w),
+                                int(landmarks[mp_holistic.PoseLandmark.LEFT_ELBOW].y * h))
+                    point_16 = (int(landmarks[mp_holistic.PoseLandmark.LEFT_WRIST].x * w),
+                                int(landmarks[mp_holistic.PoseLandmark.LEFT_WRIST].y * h))
+
+                    draw_line(image, point_12, point_14, (120, 120, 255))  # Линия от плеча до точки 12 на правой руке
+                    draw_line(image, point_12, point_14, (120, 120, 255))  # Линия от точки 12 до точки 14 на правой руке
+                    draw_line(image, point_14, point_16, (120, 120, 255))  # Линия от точки 14 до точки 16 на правой руке
 
                 kneeL, kneeR = body[25], body[26]
                 hipL, hipR = body[23], body[24]
