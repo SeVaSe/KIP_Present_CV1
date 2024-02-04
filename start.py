@@ -1,4 +1,5 @@
 import argparse
+import colorsys
 from contextlib import ExitStack
 import csv
 import time  # Добавьте этот импорт в начало вашего кода
@@ -393,7 +394,6 @@ def process_poses(image, pose_models, draw_landmarks, flip, display_only):
 
                 # Подготовка для хранения последних кадров движения в течение некоторого времени
                 last_frames[player_num] = last_frames[player_num][1:] + [empty_frame.copy()]
-                # Остальной код оставьте без изменений
 
                 body = []
                 # Преобразование координат landmarks в относительные координаты
@@ -512,11 +512,35 @@ def process_poses(image, pose_models, draw_landmarks, flip, display_only):
 
     return image
 
+def draw_lines(image, landmarks, connections, colors):
+    height, width, _ = image.shape
+    landmark_list = landmarks.landmark
+    landmark_coords = [(int(landmark.x * width), int(landmark.y * height)) for landmark in landmark_list]
 
+    for i, connection in enumerate(connections):
+        start_idx, end_idx = connection
+        start_point = landmark_coords[start_idx]
+        end_point = landmark_coords[end_idx]
+        color = colors[i]
+        cv2.line(image, start_point, end_point, color, 2)
+
+    for landmark in landmark_coords:
+        hue = (landmark[0] + landmark[1]) % 360
+        color = tuple(int(255 * i) for i in colorsys.hsv_to_rgb(hue / 360, 1.0, 1.0))
+        cv2.circle(image, landmark, 5, color, -1)
 
 # главная
 def main():
   global last_frames, last_keys, frame_midpoint
+
+  indexCam = int(input('Введите индекс камеры: '))
+
+
+  # Создание двух окон
+  cv2.namedWindow('Black Pose', cv2.WINDOW_NORMAL)
+
+  # Парсинг аргументов командной строки
+  parser = argparse.ArgumentParser()
 
   # Парсинг аргументов командной строки
   parser = argparse.ArgumentParser()
@@ -526,11 +550,10 @@ def main():
   parser.add_argument('--landmarks', '-l', help='Set to any value to draw body landmarks')
   parser.add_argument('--record', '-r', help='Set to any value to save a timestamped AVI in the current directory')
   parser.add_argument('--display', '-d', help='Set to any value to only visually display output rather than type')
-  parser.add_argument('--split', '-s',
-                      help='Split the screen into a positive integer of separate regions, defaults to 1', default='1')
+  parser.add_argument('--split', '-s', help='Split the screen into a positive integer of separate regions, defaults to 1', default='1')
   args = parser.parse_args()
 
-  INPUT = int(args.input) if args.input.isdigit() else args.input
+  INPUT = indexCam#int(args.input) if args.input.isdigit() else args.input
   FLIP = args.flip is not None
   DRAW_LANDMARKS = args.landmarks is not None
   RECORDING = args.record is not None
@@ -556,22 +579,57 @@ def main():
   MAP_FILE = args.map
   map_keys(MAP_FILE, SPLIT)
 
+  mp_pose = mp.solutions.pose
+  # Инициализация модели
+  pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
   # Инициализация mediapipe.pose для каждого "раздела"
   with ExitStack() as stack:
     pose_models = SPLIT * [stack.enter_context(mp.solutions.pose.Pose())]
 
-    # Обработка каждого кадра видео
     while cap.isOpened():
-      success, image = cap.read()
-      if not success:
-        break
+        success, image = cap.read()
+        if not success:
+            break
 
-      # Обработка поз и отображение результата
-      image = process_poses(image, pose_models, DRAW_LANDMARKS, FLIP, DISPLAY_ONLY)
 
-      # Проверка наличия команды завершения от пользователя
-      if render_and_maybe_exit(image, recording):
-        break
+        results = pose.process(image)
+        black_image = np.zeros_like(image)
+
+
+        hue_values = np.linspace(0, 360, len(mp_pose.POSE_CONNECTIONS) + 1)[:-1]
+        colors = [tuple(int(255 * i) for i in colorsys.hsv_to_rgb(hue / 360, 1.0, 1.0)) for hue in hue_values]
+
+
+        draw_lines(black_image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS, colors)
+        cv2.resizeWindow('Black Pose', 450, 300)
+        cv2.imshow('Black Pose', black_image)
+
+        # image_main = cv2.resize(image_main, (800, 600), interpolation=cv2.INTER_AREA)
+        # image_main = cv2.cvtColor(image_main, 0)
+        #
+        # # Уменьшение размера окна без изменения размера изображения
+        # cv2.resizeWindow('Main Window', 450, 300)
+        # cv2.imshow('Main Window', image_main)
+
+        # Обработка поз и отображение результата в главном окне
+        image_main = process_poses(image, pose_models, DRAW_LANDMARKS, FLIP, DISPLAY_ONLY)
+
+        # Проверка наличия команды завершения от пользователя
+        if render_and_maybe_exit(image_main, recording):
+            break
+    # # Обработка каждого кадра видео
+    # while cap.isOpened():
+    #   success, image = cap.read()
+    #   if not success:
+    #     break
+    #
+    #   # Обработка поз и отображение результата
+    #   image = process_poses(image, pose_models, DRAW_LANDMARKS, FLIP, DISPLAY_ONLY)
+    #
+    #   # Проверка наличия команды завершения от пользователя
+    #   if render_and_maybe_exit(image, recording):
+    #     break
 
   # Завершение записи видео
   if RECORDING:
