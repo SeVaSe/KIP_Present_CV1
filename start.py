@@ -513,6 +513,9 @@ def process_poses(image, pose_models, draw_landmarks, flip, display_only):
     return image
 
 def draw_lines(image, landmarks, connections, colors):
+    import random
+    num_particles = 10
+    particle_radius = 3
     height, width, _ = image.shape
     landmark_list = landmarks.landmark
     landmark_coords = [(int(landmark.x * width), int(landmark.y * height)) for landmark in landmark_list]
@@ -522,12 +525,54 @@ def draw_lines(image, landmarks, connections, colors):
         start_point = landmark_coords[start_idx]
         end_point = landmark_coords[end_idx]
         color = colors[i]
-        cv2.line(image, start_point, end_point, color, 2)
 
+
+
+        # Calculate the direction vector of the line
+        direction_vector = np.array(end_point) - np.array(start_point)
+
+        # Calculate the step size for placing particles along the line
+        step_size = 1.0 / (num_particles + 1)
+
+        # Place particles along the line
+        for j in range(1, num_particles + 1):
+            # Calculate the position of the particle along the line
+            particle_position = (start_point[0] + j * step_size * direction_vector[0],
+                                 start_point[1] + j * step_size * direction_vector[1])
+
+            # Add random jitter to the particle position for a more natural look
+            particle_position = (int(particle_position[0] + random.randint(-3, 3)),
+                                 int(particle_position[1] + random.randint(-3, 3)))
+
+            # Get hue for particle color based on its position
+            hue = (particle_position[0] + particle_position[1]) % 360
+            particle_color = tuple(int(255 * i) for i in colorsys.hsv_to_rgb(hue / 360, 1.0, 1.0))
+
+            # Draw particle
+            cv2.circle(image, particle_position, particle_radius, particle_color, -1)
+
+    # Draw landmarks
     for landmark in landmark_coords:
         hue = (landmark[0] + landmark[1]) % 360
         color = tuple(int(255 * i) for i in colorsys.hsv_to_rgb(hue / 360, 1.0, 1.0))
         cv2.circle(image, landmark, 5, color, -1)
+
+
+    # height, width, _ = image.shape
+    # landmark_list = landmarks.landmark
+    # landmark_coords = [(int(landmark.x * width), int(landmark.y * height)) for landmark in landmark_list]
+    #
+    # for i, connection in enumerate(connections):
+    #     start_idx, end_idx = connection
+    #     start_point = landmark_coords[start_idx]
+    #     end_point = landmark_coords[end_idx]
+    #     color = colors[i]
+    #     cv2.line(image, start_point, end_point, color, 2)
+    #
+    # for landmark in landmark_coords:
+    #     hue = (landmark[0] + landmark[1]) % 360
+    #     color = tuple(int(255 * i) for i in colorsys.hsv_to_rgb(hue / 360, 1.0, 1.0))
+    #     cv2.circle(image, landmark, 5, color, -1)
 
 # главная
 def main():
@@ -596,14 +641,13 @@ def main():
         results = pose.process(image)
         black_image = np.zeros_like(image)
 
+        if results.pose_landmarks is not None:
+            hue_values = np.linspace(0, 360, len(mp_pose.POSE_CONNECTIONS) + 1)[:-1]
+            colors = [tuple(int(255 * i) for i in colorsys.hsv_to_rgb(hue / 360, 1.0, 1.0)) for hue in hue_values]
 
-        hue_values = np.linspace(0, 360, len(mp_pose.POSE_CONNECTIONS) + 1)[:-1]
-        colors = [tuple(int(255 * i) for i in colorsys.hsv_to_rgb(hue / 360, 1.0, 1.0)) for hue in hue_values]
-
-
-        draw_lines(black_image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS, colors)
-        cv2.resizeWindow('Black Pose', 450, 300)
-        cv2.imshow('Black Pose', black_image)
+            draw_lines(black_image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS, colors)
+            cv2.resizeWindow('Black Pose', 450, 300)
+            cv2.imshow('Black Pose', black_image)
 
         # image_main = cv2.resize(image_main, (800, 600), interpolation=cv2.INTER_AREA)
         # image_main = cv2.cvtColor(image_main, 0)
